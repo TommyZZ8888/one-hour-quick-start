@@ -1,0 +1,97 @@
+# Vagrant 2.3.4
+# VirtualBox 6.1.40
+# ubuntu 22.04 Jammy
+$vm_box         = "ubuntu/jammy64"
+$vm_box_url     = "https://mirrors.tuna.tsinghua.edu.cn/ubuntu-cloud-images/jammy/current/jammy-server-cloudimg-amd64-vagrant.box"
+
+# 使用 VBoxManage list hostonlyifs 命令查看分配给虚拟机的网段
+# ip地址从192.168.56.20的开始递增
+$ip_range       = "192.168.56."
+$ip_start       = 10
+$master_ip      = $ip_range + "#{$ip_start}"
+
+# master配置
+$master_cpus    = 2
+$master_memory  = 2048
+
+# worker配置 
+$worker_count   = 2
+$worker_cpus    = 2
+$worker_memory  = 1024
+
+# k3s令牌 
+$k3s_token      = "JaxJfQJsUQX2pVUX"
+# 网络设置 (多网卡环境下需要指定网卡)
+$net_iface      = "enp0s8"
+
+# hostname
+$master_host    = "k3s-server"
+$worker_host    = "k3s-agent"
+
+# 虚拟机配置
+Vagrant.configure("2") do |config|
+
+  # 通用配置
+  config.vm.box = $vm_box
+  config.vm.box_url = $vm_box_url
+
+  # 通用初始化脚本
+  config.vm.provision "shell", path: "bootstrap.sh"
+
+  # 显卡控制器使用VMSVGA
+  config.vm.provider :virtualbox do |vbox|
+    vbox.customize ['modifyvm', :id, '--graphicscontroller', 'vmsvga']
+  end
+
+  # 主节点配置
+  config.vm.define $master_host do |master|
+
+    master.vm.hostname = $master_host
+    master.vm.network "private_network", ip: $ip_range + "#{$ip_start}"
+
+    # 规格配置
+    master.vm.provider :virtualbox do |vbox|
+      vbox.name    = $master_host
+      vbox.cpus    = $master_cpus
+      vbox.memory  = $master_memory
+    end
+    
+    #k3s server 安装命令
+    master.vm.provision "shell" do |script|
+      script.inline = <<-SHELL
+          curl -sfL https://rancher-mirror.oss-cn-beijing.aliyuncs.com/k3s/k3s-install.sh | \
+          K3S_TOKEN=$1 INSTALL_K3S_MIRROR=cn \
+          sh -s - --flannel-iface $2
+        SHELL
+      script.args   = [$k3s_token, $net_iface]
+    end
+  end
+
+  # worker节点配置
+  (1..$worker_count).each do |i|
+
+    host_name = $worker_host + "#{i}"
+
+    config.vm.define "#{host_name}" do |worker|
+      worker.vm.hostname = "#{host_name}"
+      worker.vm.network "private_network", ip: $ip_range + "#{$ip_start+i}"
+     
+      # 规格配置
+      worker.vm.provider :virtualbox do |vbox|
+        vbox.name    = "#{host_name}"
+        vbox.cpus    = $worker_cpus
+        vbox.memory  = $worker_memory
+      end
+
+      #k3s agent 安装命令
+      worker.vm.provision "shell" do |script|
+        script.inline = <<-SHELL
+            curl -sfL https://rancher-mirror.oss-cn-beijing.aliyuncs.com/k3s/k3s-install.sh | \
+            INSTALL_K3S_MIRROR=cn K3S_URL=https://$1:6443 K3S_TOKEN=$2 \
+            sh -s - --flannel-iface $3
+          SHELL
+        script.args   = [$master_ip, $k3s_token, $net_iface]
+      end
+    end
+  end
+end

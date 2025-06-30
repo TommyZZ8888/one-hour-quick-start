@@ -1,0 +1,1 @@
+本目录包含了课程中/etc/nginx/nginx.conf文件和conf.d目录下所有示例的配置文件。

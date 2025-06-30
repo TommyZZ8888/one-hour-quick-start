@@ -1,0 +1,92 @@
+# Vagrant 2.3.4
+# VirtualBox 6.1.40
+# ubuntu 20.04 Focal
+$vm_box         = "ubuntu/focal64"
+$vm_box_url     = "https://mirrors.tuna.tsinghua.edu.cn/ubuntu-cloud-images/focal/current/focal-server-cloudimg-amd64-vagrant.box"
+
+# kubernetes版本号
+# 支持 v1.24.0 或更高版本，其他版本未经测试
+$kube_version   = "1.26.0"
+
+# 使用 VBoxManage list hostonlyifs 命令查看分配给虚拟机的网段
+# ip地址从192.168.56.100的开始递增
+$ip_range       = "192.168.56."
+$ip_start       = 30
+$master_ip      = $ip_range + "#{$ip_start}"
+
+# master配置
+$master_cpus    = 2
+$master_memory  = 2048
+
+# worker配置 
+$worker_count   = 2
+$worker_cpus    = 2
+$worker_memory  = 1024
+
+# hostname
+$master_host    = "k8s-master-node-1"
+$worker_host    = "k8s-worker-node-"
+
+# 虚拟机配置
+Vagrant.configure("2") do |config|
+
+  # 通用配置
+  config.vm.box = $vm_box
+  config.vm.box_url = $vm_box_url
+  # 通用初始化脚本
+  config.vm.provision "shell", path: "bootstrap.sh"
+
+  # 显卡控制器使用VMSVGA
+  config.vm.provider :virtualbox do |vbox|
+    vbox.customize ['modifyvm', :id, '--graphicscontroller', 'vmsvga']
+  end
+
+  # ===== worker节点配置 =====
+  (1..$worker_count).each do |i|
+
+    host_name = $worker_host + "#{i}"
+
+    config.vm.define "#{host_name}" do |worker|
+      worker.vm.hostname = "#{host_name}"
+      worker.vm.network "private_network", ip: $ip_range + "#{$ip_start+i}"
+
+      # 规格配置
+      worker.vm.provider :virtualbox do |vbox|
+        vbox.name    = "#{host_name}"
+        vbox.cpus    = $worker_cpus
+        vbox.memory  = $worker_memory
+      end
+    end
+  end
+
+
+  # ===== 主节点配置 =====
+  config.vm.define $master_host do |master|
+
+    master.vm.hostname = $master_host
+    master.vm.network "private_network", ip: $ip_range + "#{$ip_start}"
+
+    # 规格配置
+    master.vm.provider :virtualbox do |vbox|
+      vbox.name    = $master_host
+      vbox.cpus    = $master_cpus
+      vbox.memory  = $master_memory
+    end
+
+    # 设置节点
+    master.vm.provision "shell" do |script|
+      script.path = "kainstall-ubuntu.sh"
+      script.args = ["init",
+        "--master",$master_ip,
+        "--worker","192.168.56.31,192.168.56.32",
+        "--user","root",
+        "--password","123456",
+        "--port","22",
+        "--version",$kube_version
+      ]
+    end
+  end
+
+end
+
+
